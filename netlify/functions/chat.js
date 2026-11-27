@@ -1,90 +1,80 @@
-exports.handler = async function (event) {
-  const headers = {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS"
-  };
+exports.handler = async function(event) {
 
-  if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 200,
-      headers,
-      body: ""
-    };
-  }
-
+  // Only allow POST requests
   if (event.httpMethod !== "POST") {
     return {
       statusCode: 405,
-      headers,
       body: JSON.stringify({
-        error: "Please use POST method."
+        error: "POST request required."
       })
     };
   }
 
   try {
+
+    // Get the secret API key from Netlify
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
-      throw new Error("Gemini API key is missing.");
-    }
-
-    const data = JSON.parse(event.body || "{}");
-    const message = data.message || data.question;
-
-    if (!message || !message.trim()) {
       return {
-        statusCode: 400,
-        headers,
+        statusCode: 500,
         body: JSON.stringify({
-          error: "Please enter a question."
+          error: "GEMINI_API_KEY is missing in Netlify."
         })
       };
     }
 
-    const systemPrompt = `
-You are Jeevan AI, a helpful Computer Science tutor.
+    // Read incoming messages
+    const body = JSON.parse(event.body || "{}");
+    const messages = body.messages || [];
 
-Your job is to answer ANY question the user asks.
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          error: "Please send a message."
+        })
+      };
+    }
 
-Topics include:
-- Computer Science
-- ADA (Analysis and Design of Algorithms)
-- Data Structures
-- Java, Python, C, C++
-- HTML, CSS, JavaScript
-- DBMS and SQL
-- Machine Learning
-- Artificial Intelligence
-- Android Development
-- Operating Systems
-- Computer Networks
-- Software Engineering
-- Mathematics
-- Programming
-- General knowledge
+    // Convert chat history to Gemini format
+    const contents = messages
+      .filter(function(m) {
+        return m.role === "user" || m.role === "assistant";
+      })
+      .map(function(m) {
+        return {
+          role: m.role === "assistant" ? "model" : "user",
+          parts: [
+            {
+              text: String(m.content || "")
+            }
+          ]
+        };
+      });
 
-RULES:
+    // Gemini system instructions
+    const systemInstruction = {
+      parts: [
+        {
+          text:
+            "You are Jeevan AI, a helpful computer science tutor. " +
+            "Answer general computer science questions, definitions, " +
+            "algorithms, programming, Java, Python, C, SQL, DBMS, " +
+            "ADA, machine learning, web development, and exam questions. " +
+            "Use simple English and easy points when requested. " +
+            "For definitions, give a clear definition. " +
+            "For exam answers, organize with headings and numbered points. " +
+            "For programming requests, provide complete working code, " +
+            "explain the code, and mention its output when useful. " +
+            "Be accurate, friendly, and educational. " +
+            "Do not restrict answers only to Jeevan's portfolio."
+        }
+      ]
+    };
 
-1. Answer the user's actual question directly.
-2. Use simple, easy-to-understand English.
-3. For definitions, provide a clear definition first.
-4. For exam questions, use headings and easy points.
-5. When the user asks for a program, provide complete working code.
-6. Explain code simply after providing it.
-7. For differences, use a table when appropriate.
-8. For algorithms, explain steps and provide an example.
-9. For programming questions, identify the programming language if specified.
-10. Never respond that you only answer portfolio questions.
-11. Do not give fixed FAQ answers.
-12. Generate a fresh answer based on every user question.
-
-You are a friendly tutor helping students learn.
-`;
-
-    const response = await fetch(
+    // Call Gemini API
+    const geminiResponse = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
       {
         method: "POST",
@@ -93,23 +83,8 @@ You are a friendly tutor helping students learn.
           "x-goog-api-key": apiKey
         },
         body: JSON.stringify({
-          systemInstruction: {
-            parts: [
-              {
-                text: systemPrompt
-              }
-            ]
-          },
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: message
-                }
-              ]
-            }
-          ],
+          systemInstruction: systemInstruction,
+          contents: contents,
           generationConfig: {
             temperature: 0.7,
             maxOutputTokens: 2048
@@ -118,12 +93,12 @@ You are a friendly tutor helping students learn.
       }
     );
 
-    const result = await response.json();
+    const result = await geminiResponse.json();
 
-    if (!response.ok) {
+    // Handle Google API errors
+    if (!geminiResponse.ok) {
       return {
-        statusCode: response.status,
-        headers,
+        statusCode: geminiResponse.status,
         body: JSON.stringify({
           error:
             result.error?.message ||
@@ -132,30 +107,44 @@ You are a friendly tutor helping students learn.
       };
     }
 
+    // Extract generated answer
     const answer =
       result.candidates?.[0]?.content?.parts
-        ?.map(part => part.text || "")
-        .join("");
+        ?.map(function(part) {
+          return part.text || "";
+        })
+        .join("")
+        .trim();
 
     if (!answer) {
-      throw new Error("Gemini returned an empty answer.");
+      return {
+        statusCode: 500,
+        body: JSON.stringify({
+          error: "Gemini returned an empty answer."
+        })
+      };
     }
 
+    // Send answer back to website
     return {
       statusCode: 200,
-      headers,
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify({
         answer: answer
       })
     };
 
   } catch (error) {
+
     return {
       statusCode: 500,
-      headers,
       body: JSON.stringify({
-        error: error.message || "Something went wrong."
+        error: error.message || "Server error."
       })
     };
+
   }
+
 };
