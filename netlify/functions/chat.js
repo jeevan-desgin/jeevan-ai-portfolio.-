@@ -1,10 +1,26 @@
-netlify/functions/chat.js
+exports.handler = async function (event) {
+  const headers = {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS"
+  };
 
-exports.handler = async function(event) {
+  if (event.httpMethod === "OPTIONS") {
+    return {
+      statusCode: 200,
+      headers,
+      body: ""
+    };
+  }
+
   if (event.httpMethod !== "POST") {
     return {
       statusCode: 405,
-      body: JSON.stringify({ error: "Only POST requests are allowed." })
+      headers,
+      body: JSON.stringify({
+        error: "Please use POST method."
+      })
     };
   }
 
@@ -12,61 +28,63 @@ exports.handler = async function(event) {
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
+      throw new Error("Gemini API key is missing.");
+    }
+
+    const data = JSON.parse(event.body || "{}");
+    const message = data.message || data.question;
+
+    if (!message || !message.trim()) {
       return {
-        statusCode: 500,
+        statusCode: 400,
+        headers,
         body: JSON.stringify({
-          error: "Gemini API key is missing. Add GEMINI_API_KEY in Netlify environment variables."
+          error: "Please enter a question."
         })
       };
     }
 
-    const body = JSON.parse(event.body || "{}");
-    const messages = body.messages || [];
-
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: "Please send a message." })
-      };
-    }
-
-    const contents = messages.slice(-12).map(function(message) {
-      return {
-        role: message.role === "assistant" ? "model" : "user",
-        parts: [{
-          text: String(message.text || "").slice(0, 4000)
-        }]
-      };
-    });
-
     const systemPrompt = `
-You are the friendly AI assistant on Jeevan G T's personal portfolio website.
+You are Jeevan AI, a helpful Computer Science tutor.
 
-Portfolio information:
-Name: Jeevan G T
-Degree: BSc student
-College: Adichunchanagiri University
-Graduation year: 2027
-CGPA: 8.47
+Your job is to answer ANY question the user asks.
 
-Skills:
-HTML, CSS, JavaScript, Java, Python, C, SQL,
-DBMS, MS Excel, Web Development and Machine Learning basics.
+Topics include:
+- Computer Science
+- ADA (Analysis and Design of Algorithms)
+- Data Structures
+- Java, Python, C, C++
+- HTML, CSS, JavaScript
+- DBMS and SQL
+- Machine Learning
+- Artificial Intelligence
+- Android Development
+- Operating Systems
+- Computer Networks
+- Software Engineering
+- Mathematics
+- Programming
+- General knowledge
 
-Projects:
-1. Hospital Management System
-2. Personal Portfolio Website
-3. Student Pass Prediction System
+RULES:
 
-Email: jeevangt99@email.com
+1. Answer the user's actual question directly.
+2. Use simple, easy-to-understand English.
+3. For definitions, provide a clear definition first.
+4. For exam questions, use headings and easy points.
+5. When the user asks for a program, provide complete working code.
+6. Explain code simply after providing it.
+7. For differences, use a table when appropriate.
+8. For algorithms, explain steps and provide an example.
+9. For programming questions, identify the programming language if specified.
+10. Never respond that you only answer portfolio questions.
+11. Do not give fixed FAQ answers.
+12. Generate a fresh answer based on every user question.
 
-Answer questions about Jeevan accurately using the above information.
-Do not invent experience, awards, skills, marks, or personal details.
-You are also a helpful general AI assistant and can answer other questions.
-Use clear, friendly, simple language.
-    `;
+You are a friendly tutor helping students learn.
+`;
 
-    const apiResponse = await fetch(
+    const response = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
       {
         method: "POST",
@@ -76,55 +94,67 @@ Use clear, friendly, simple language.
         },
         body: JSON.stringify({
           systemInstruction: {
-            parts: [{ text: systemPrompt }]
+            parts: [
+              {
+                text: systemPrompt
+              }
+            ]
           },
-          contents: contents,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: message
+                }
+              ]
+            }
+          ],
           generationConfig: {
-            maxOutputTokens: 1000,
-            temperature: 0.7
+            temperature: 0.7,
+            maxOutputTokens: 2048
           }
         })
       }
     );
 
-    const result = await apiResponse.json();
+    const result = await response.json();
 
-    if (!apiResponse.ok) {
+    if (!response.ok) {
       return {
-        statusCode: apiResponse.status,
+        statusCode: response.status,
+        headers,
         body: JSON.stringify({
-          error: result.error?.message || "Gemini API error."
+          error:
+            result.error?.message ||
+            "Gemini API request failed."
         })
       };
     }
 
-    const reply = result.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || "")
-      .join("")
-      .trim();
+    const answer =
+      result.candidates?.[0]?.content?.parts
+        ?.map(part => part.text || "")
+        .join("");
 
-    if (!reply) {
-      return {
-        statusCode: 502,
-        body: JSON.stringify({
-          error: "Gemini returned an empty response. Please try again."
-        })
-      };
+    if (!answer) {
+      throw new Error("Gemini returned an empty answer.");
     }
 
     return {
       statusCode: 200,
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ reply: reply })
+      headers,
+      body: JSON.stringify({
+        answer: answer
+      })
     };
 
   } catch (error) {
     return {
       statusCode: 500,
+      headers,
       body: JSON.stringify({
-        error: error.message || "Server error."
+        error: error.message || "Something went wrong."
       })
     };
   }
